@@ -45,8 +45,9 @@ struct Spline{
     }
     basis :: Basis
     coefs :: CoefVector
+    extrapolate::Integer
 
-    function Spline(B::AbstractBSplineBasis, coefs::AbstractVector)
+    function Spline(B::AbstractBSplineBasis, coefs::AbstractVector; extrapolate::Integer = 1)
         length(coefs) == length(B) ||
             throw(ArgumentError("wrong number of coefficients"))
         Basis = typeof(B)
@@ -54,7 +55,8 @@ struct Spline{
         CoefVector = typeof(coefs)
         k = order(B)
         @assert k >= 1
-        new{T, Basis, CoefVector}(B, coefs)
+        @assert extrapolate in [1,2,3,4]
+        new{T, Basis, CoefVector}(B, coefs, extrapolate)
     end
 end
 
@@ -137,8 +139,13 @@ order(S::Spline) = order(typeof(S))
 function _evaluate(::BSplineBasis, S::Spline, x)
     T = eltype(S)
     t = knots(S)
-    n = knot_interval(t, x)
-    n === nothing && return zero(T)  # x is outside of knot domain
+    n, zone = knot_interval(t, x)
+    if zone != 0
+        S.extrapolate == 1 && return zero(T)
+        S.extrapolate == 2 && throw(ArgumentError(" Point $x is outside of knot domain."))
+        S.extrapolate == 3 && zone == 1 ? return t[lastindex(t)] : return t[n]
+        #If S.extrapolate == 0, then continue
+    end
     k = order(S)
     spline_kernel(coefficients(S), t, n, x, BSplineOrder(k))
 end
@@ -331,19 +338,26 @@ function _integral(::BSplineBasis, S::Spline)
 end
 
 function knot_interval(t::AbstractVector, x)
-    n = searchsortedlast(t, x)  # t[n] <= x < t[n + 1]
-    n == 0 && return nothing    # x < t[1]
-
-    Nt = length(t)
-
-    if n == Nt  # i.e. if x >= t[end]
-        t_last = t[n]
-        x > t_last && return nothing
-        # If x is exactly on the last knot, decrease the index as necessary.
-        while t[n] == t_last
-            n -= one(n)
+    if x < first(ts)
+        i=firstindex(ts)
+        tfirst = ts[firstindex(ts)]
+        while true
+            ts[i+1] ≠ tfirst && break
+            i += 1
         end
+        return i, -1
     end
-
-    n
+    i = searchsortedlast(ts, x)
+    Nt = lastindex(ts)
+    if i == Nt
+        tlast = ts[Nt]
+        while true
+            i -= 1
+            ts[i] ≠ tlast && break
+        end
+        zone = (x > tlast) ? 1 : 0
+        return i, zone
+    else
+        return i, 0  # usual case
+    end
 end
